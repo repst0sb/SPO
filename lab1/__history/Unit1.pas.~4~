@@ -1,0 +1,233 @@
+unit Unit1;
+
+interface
+
+uses
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls;
+
+type
+  TForm1 = class(TForm)
+    memCode: TMemo;
+    memResult: TMemo;
+    btnAnalyze: TButton;
+    btnLoadFile: TButton;
+    OpenDialog1: TOpenDialog;
+    procedure btnAnalyzeClick(Sender: TObject);
+    procedure btnLoadFileClick(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+  private
+    function CountOperators(const CodeText: string): Integer;
+    procedure AnalyzeGilb(const CodeText: string; out AbsoluteCL, OperatorsN, MaxCLI: Integer; out RelativeCL: Double);
+  public
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.dfm}
+
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+  Caption := 'Анализатор метрик Джилба';
+  ClientWidth := 720;
+  ClientHeight := 620;
+  Position := poScreenCenter;
+
+  OpenDialog1.Filter := 'Файлы Swift (*.swift;*.txt)|*.swift;*.txt|Все файлы (*.*)|*.*';
+
+  memCode.Left := 15;
+  memCode.Top := 15;
+  memCode.Width := 690;
+  memCode.Height := 240;
+  memCode.ScrollBars := ssVertical;
+  memCode.Clear;
+
+  btnLoadFile.Left := 15;
+  btnLoadFile.Top := 265;
+  btnLoadFile.Width := 160;
+  btnLoadFile.Height := 35;
+  btnLoadFile.Caption := 'Загрузить файл';
+
+  btnAnalyze.Left := 185;
+  btnAnalyze.Top := 265;
+  btnAnalyze.Width := 200;
+  btnAnalyze.Height := 35;
+  btnAnalyze.Caption := 'Рассчитать метрики';
+
+  memResult.Left := 15;
+  memResult.Top := 310;
+  memResult.Width := 690;
+  memResult.Height := 285;
+  memResult.ReadOnly := True;
+  memResult.ScrollBars := ssVertical;
+  memResult.Clear;
+end;
+
+procedure TForm1.btnLoadFileClick(Sender: TObject);
+begin
+  if OpenDialog1.Execute then
+    memCode.Lines.LoadFromFile(OpenDialog1.FileName);
+end;
+
+function TForm1.CountOperators(const CodeText: string): Integer;
+var
+  Lines: TStringList;
+  i: Integer;
+  TrimmedLine: string;
+begin
+  Result := 0;
+  Lines := TStringList.Create;
+  try
+    Lines.Text := CodeText;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      TrimmedLine := Trim(LowerCase(Lines[i]));
+
+      if (TrimmedLine = '') or (Pos('//', TrimmedLine) = 1) then
+        Continue;
+
+      if (TrimmedLine = '{') or (TrimmedLine = '}') or
+         (TrimmedLine = 'else') or (TrimmedLine = '} else {') or (TrimmedLine = 'else {') then
+        Continue;
+
+      if Pos('func ', TrimmedLine) = 1 then
+        Continue;
+
+      if (Pos('case ', TrimmedLine) = 1) or (Pos('default:', TrimmedLine) = 1) then
+        Continue;
+
+      if (TrimmedLine = 'repeat') or (TrimmedLine = 'repeat {') then
+        Continue;
+
+      Inc(Result);
+    end;
+
+    if Result = 0 then Result := 1;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TForm1.AnalyzeGilb(const CodeText: string; out AbsoluteCL, OperatorsN, MaxCLI: Integer; out RelativeCL: Double);
+var
+  Lines: TStringList;
+  i, TempDepth: Integer;
+  Line, TrimmedLine: string;
+  CurrentDepth: Integer;
+  InCase: Boolean;
+  CaseBranchCount: Integer;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := CodeText;
+    AbsoluteCL := 0;
+    MaxCLI := 0;
+    CurrentDepth := 0;
+    InCase := False;
+    CaseBranchCount := 0;
+
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := LowerCase(Lines[i]);
+      TrimmedLine := Trim(Line);
+
+      if (TrimmedLine = '') or (Pos('//', TrimmedLine) = 1) or (TrimmedLine = '{') then
+        Continue;
+
+      if (Pos('if ', TrimmedLine) = 1) or (Pos(' if ', Line) > 0) or (Pos('if(', Line) > 0) then
+      begin
+        Inc(AbsoluteCL);
+        Inc(CurrentDepth);
+      end;
+
+      if (Pos('for ', TrimmedLine) = 1) or (Pos(' for ', Line) > 0) or
+         (Pos('repeat', TrimmedLine) = 1) then
+      begin
+        Inc(AbsoluteCL);
+        Inc(CurrentDepth);
+      end;
+
+      if ((Pos('while ', TrimmedLine) = 1) or (Pos(' while ', Line) > 0)) and (Pos('} while', TrimmedLine) <> 1) then
+      begin
+        Inc(AbsoluteCL);
+        Inc(CurrentDepth);
+      end;
+
+      if (Pos('switch', TrimmedLine) = 1) or (Pos(' switch ', Line) > 0) then
+      begin
+        InCase := True;
+        CaseBranchCount := 0;
+        Continue;
+      end;
+
+      if InCase then
+      begin
+        if (Pos('case ', TrimmedLine) = 1) and (Pos(':', TrimmedLine) > 0) then
+        begin
+          Inc(AbsoluteCL);
+          Inc(CaseBranchCount);
+
+          if CaseBranchCount = 1 then
+            TempDepth := CurrentDepth + 1
+          else
+            TempDepth := CurrentDepth + CaseBranchCount - 1;
+
+          if TempDepth > MaxCLI then
+            MaxCLI := TempDepth;
+        end;
+
+        if Pos('}', TrimmedLine) = 1 then
+        begin
+          InCase := False;
+          CaseBranchCount := 0;
+        end;
+      end;
+
+      if CurrentDepth > MaxCLI then
+        MaxCLI := CurrentDepth;
+
+      if Pos('}', TrimmedLine) = 1 then
+      begin
+        if CurrentDepth > 0 then
+          Dec(CurrentDepth);
+      end;
+    end;
+
+    OperatorsN := CountOperators(CodeText);
+    RelativeCL := AbsoluteCL / OperatorsN;
+
+    if MaxCLI > AbsoluteCL then
+      MaxCLI := AbsoluteCL;
+
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TForm1.btnAnalyzeClick(Sender: TObject);
+var
+  CL, N, CLI: Integer;
+  cl_rel: Double;
+begin
+  AnalyzeGilb(memCode.Lines.Text, CL, N, CLI, cl_rel);
+
+  memResult.Clear;
+  memResult.Lines.Add('=== РЕЗУЛЬТАТЫ АНАЛИЗА МЕТРИК ДЖИЛБА ===');
+  memResult.Lines.Add('');
+  memResult.Lines.Add(Format('1. Абсолютная сложность (CL):           %d', [CL]));
+  memResult.Lines.Add(Format('2. Общее количество операторов (N):     %d', [N]));
+  memResult.Lines.Add(Format('3. Относительная сложность (cl = CL/N): %.3f', [cl_rel]));
+  memResult.Lines.Add(Format('4. Максимальная вложенность (CLI):      %d', [CLI]));
+  memResult.Lines.Add('');
+  memResult.Lines.Add('=========================================');
+
+  if CL >= CLI then
+    memResult.Lines.Add('Проверка пройдна: CL >= CLI')
+  else
+    memResult.Lines.Add('Ошибка: Вложенность превышает абсолютную сложность!');
+end;
+
+end.
