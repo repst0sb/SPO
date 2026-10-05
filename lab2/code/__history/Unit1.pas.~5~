@@ -114,10 +114,9 @@ end;
 procedure TForm1.AnalyzeGilb(const CodeText: string; out AbsoluteCL, OperatorsN, MaxCLI: Integer; out RelativeCL: Double);
 var
   Lines: TStringList;
-  i: Integer;
+  i, TempDepth: Integer;
   Line, TrimmedLine: string;
   CurrentDepth: Integer;
-  SwitchBaseDepth: Integer;
   InCase: Boolean;
   CaseBranchCount: Integer;
 begin
@@ -127,7 +126,6 @@ begin
     AbsoluteCL := 0;
     MaxCLI := 0;
     CurrentDepth := 0;
-    SwitchBaseDepth := 0;
     InCase := False;
     CaseBranchCount := 0;
 
@@ -143,27 +141,24 @@ begin
       begin
         Inc(AbsoluteCL);
         Inc(CurrentDepth);
-        if CurrentDepth > MaxCLI then MaxCLI := CurrentDepth;
       end;
 
-      if (Pos('for ', TrimmedLine) = 1) or (Pos(' for ', Line) > 0) or (Pos('repeat', TrimmedLine) = 1) then
+      if (Pos('for ', TrimmedLine) = 1) or (Pos(' for ', Line) > 0) or
+         (Pos('repeat', TrimmedLine) = 1) then
       begin
         Inc(AbsoluteCL);
         Inc(CurrentDepth);
-        if CurrentDepth > MaxCLI then MaxCLI := CurrentDepth;
       end;
 
       if ((Pos('while ', TrimmedLine) = 1) or (Pos(' while ', Line) > 0)) and (Pos('} while', TrimmedLine) <> 1) then
       begin
         Inc(AbsoluteCL);
         Inc(CurrentDepth);
-        if CurrentDepth > MaxCLI then MaxCLI := CurrentDepth;
       end;
 
       if (Pos('switch', TrimmedLine) = 1) or (Pos(' switch ', Line) > 0) then
       begin
         InCase := True;
-        SwitchBaseDepth := CurrentDepth;
         CaseBranchCount := 0;
         Continue;
       end;
@@ -175,25 +170,29 @@ begin
           Inc(AbsoluteCL);
           Inc(CaseBranchCount);
 
-          if CaseBranchCount <= 3 then
-            CurrentDepth := SwitchBaseDepth + CaseBranchCount
+          if CaseBranchCount = 1 then
+            TempDepth := CurrentDepth + 1
           else
-            CurrentDepth := SwitchBaseDepth + 3;
+            TempDepth := CurrentDepth + CaseBranchCount - 1;
 
-          if CurrentDepth > MaxCLI then MaxCLI := CurrentDepth;
+          if TempDepth > MaxCLI then
+            MaxCLI := TempDepth;
+        end;
+
+        if Pos('}', TrimmedLine) = 1 then
+        begin
+          InCase := False;
+          CaseBranchCount := 0;
         end;
       end;
+
+      if CurrentDepth > MaxCLI then
+        MaxCLI := CurrentDepth;
 
       if Pos('}', TrimmedLine) = 1 then
       begin
         if CurrentDepth > 0 then
           Dec(CurrentDepth);
-
-        if InCase and (CurrentDepth <= SwitchBaseDepth) then
-        begin
-          InCase := False;
-          CaseBranchCount := 0;
-        end;
       end;
     end;
 
